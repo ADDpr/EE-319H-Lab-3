@@ -1,0 +1,798 @@
+
+
+
+ARM Macro Assembler    Page 1 
+
+
+    1 00000000         ;****************** main.s ***************
+    2 00000000         ; Program written by: Anthony Do
+    3 00000000         ; Date Created: 2/4/2017
+    4 00000000         ; Last Modified: 1/17/2021
+    5 00000000         ; Brief description of the program
+    6 00000000         ;   The LED toggles at 2 Hz and a varying duty-cycle
+    7 00000000         ; Hardware connections (External: One button and one LED
+                       )
+    8 00000000         ;  PE1 is Button input  (1 means pressed, 0 means not pr
+                       essed)
+    9 00000000         ;  PE2 is LED output (1 activates external LED on protob
+                       oard)
+   10 00000000         ;  PF4 is builtin button SW1 on Launchpad (Internal) 
+   11 00000000         ;        Negative Logic (0 means pressed, 1 means not pr
+                       essed)
+   12 00000000         ; Overall functionality of this system is to operate lik
+                       e this
+   13 00000000         ;   1) Make PE2 an output and make PE1 and PF4 inputs.
+   14 00000000         ;   2) The system starts with the the LED toggling at 2H
+                       z,
+   15 00000000         ;      which is 2 times per second with a duty-cycle of 
+                       30%.
+   16 00000000         ;      Therefore, the LED is ON for 150ms and off for 35
+                       0 ms.
+   17 00000000         ;   3) When the button (PE1) is pressed-and-released inc
+                       rease
+   18 00000000         ;      the duty cycle by 20% (modulo 100%). Therefore fo
+                       r each
+   19 00000000         ;      press-and-release the duty cycle changes from 30%
+                        to 70% to 70%
+   20 00000000         ;      to 90% to 10% to 30% so on
+   21 00000000         ;   4) Implement a "breathing LED" when SW1 (PF4) on the
+                        Launchpad is pressed:
+   22 00000000         ;      a) Be creative and play around with what "breathi
+                       ng" means.
+   23 00000000         ;         An example of "breathing" is most computers po
+                       wer LED in sleep mode
+   24 00000000         ;         (e.g., https://www.youtube.com/watch?v=ZT6siXy
+                       IjvQ).
+   25 00000000         ;      b) When (PF4) is released while in breathing mode
+                       , resume blinking at 2Hz.
+   26 00000000         ;         The duty cycle can either match the most recen
+                       t duty-
+   27 00000000         ;         cycle or reset to 30%.
+   28 00000000         ;      TIP: debugging the breathing LED algorithm using 
+                       the real board.
+   29 00000000         ; PortE device registers
+   30 00000000 400243FC 
+                       GPIO_PORTE_DATA_R
+                               EQU              0x400243FC
+   31 00000000 40024400 
+                       GPIO_PORTE_DIR_R
+                               EQU              0x40024400
+   32 00000000 40024420 
+                       GPIO_PORTE_AFSEL_R
+                               EQU              0x40024420
+   33 00000000 4002451C 
+                       GPIO_PORTE_DEN_R
+                               EQU              0x4002451C
+
+
+
+ARM Macro Assembler    Page 2 
+
+
+   34 00000000         ; PortF device registers
+   35 00000000 400253FC 
+                       GPIO_PORTF_DATA_R
+                               EQU              0x400253FC
+   36 00000000 40025400 
+                       GPIO_PORTF_DIR_R
+                               EQU              0x40025400
+   37 00000000 40025420 
+                       GPIO_PORTF_AFSEL_R
+                               EQU              0x40025420
+   38 00000000 40025510 
+                       GPIO_PORTF_PUR_R
+                               EQU              0x40025510
+   39 00000000 4002551C 
+                       GPIO_PORTF_DEN_R
+                               EQU              0x4002551C
+   40 00000000 40025520 
+                       GPIO_PORTF_LOCK_R
+                               EQU              0x40025520
+   41 00000000 40025524 
+                       GPIO_PORTF_CR_R
+                               EQU              0x40025524
+   42 00000000 4C4F434B 
+                       GPIO_LOCK_KEY
+                               EQU              0x4C4F434B  ; Unlocks the GPIO_
+                                                            CR register
+   43 00000000 400FE608 
+                       SYSCTL_RCGCGPIO_R
+                               EQU              0x400FE608
+   44 00000000         
+   45 00000000                 IMPORT           TExaS_Init
+   46 00000000                 THUMB
+   47 00000000                 AREA             DATA, ALIGN=2
+   48 00000000         ;global variables go here
+   49 00000000         
+   50 00000000 00 00 00 
+              00       ONDuty  SPACE            4
+   51 00000004 00 00 00 
+              00       OFFDuty SPACE            4
+   52 00000008 00 00 00 
+              00       BDutyON SPACE            4
+   53 0000000C 00 00 00 
+              00       BDutyOFF
+                               SPACE            4
+   54 00000010 00      SlopeCt SPACE            1
+   55 00000011 00      RampFlag
+                               SPACE            1
+   56 00000012                 AREA             |.text|, CODE, READONLY, ALIGN=
+2
+   57 00000000                 THUMB
+   58 00000000         
+   59 00000000                 EXPORT           Start
+   60 00000000         
+   61 00000000         ;Delays the sim/circuit depending on the value initializ
+                       ed in R2
+   62 00000000 1E52    Delay   SUBS             R2, R2, #1
+   63 00000002 D1FD            BNE              Delay
+   64 00000004 4770            BX               LR
+   65 00000006         
+
+
+
+ARM Macro Assembler    Page 3 
+
+
+   66 00000006         
+   67 00000006         
+   68 00000006         Start
+   69 00000006         ; TExaS_Init sets bus clock at 80 MHz
+   70 00000006 F7FF FFFE       BL               TExaS_Init
+   71 0000000A         ;A. Turn on the clock on port E and F
+   72 0000000A 4867            LDR              R0, =SYSCTL_RCGCGPIO_R ;read
+   73 0000000C 7801            LDRB             R1, [R0]
+   74 0000000E F041 0130       ORR              R1, #0x30   ;modify
+   75 00000012 7001            STRB             R1, [R0]
+   76 00000014         ;B. Wait for clock to stabalize
+   77 00000014 BF00            NOP
+   78 00000016 BF00            NOP
+   79 00000018         ;C. Define Input and output for Port E (DIR)
+   80 00000018 4864            LDR              R0, =GPIO_PORTE_DIR_R
+   81 0000001A 7801            LDRB             R1, [R0]
+   82 0000001C F001 01FD       AND              R1, #0xFD
+   83 00000020 F041 0104       ORR              R1, #0x04
+   84 00000024 7001            STRB             R1, [R0]
+   85 00000026         ;D. Digitally enable E pins (DEN)
+   86 00000026 4862            LDR              R0, =GPIO_PORTE_DEN_R
+   87 00000028 7801            LDRB             R1, [R0]
+   88 0000002A F041 0106       ORR              R1, #0x06
+   89 0000002E 7001            STRB             R1, [R0]
+   90 00000030         ;E. Define Input and output for Port F (DIR)
+   91 00000030 4860            LDR              R0, =GPIO_PORTF_DIR_R
+   92 00000032 7801            LDRB             R1, [R0]
+   93 00000034 F021 0110       BIC              R1, R1, #0x10
+   94 00000038 7001            STRB             R1, [R0]
+   95 0000003A         ;F. Digitally enable F pins (DEN)
+   96 0000003A 485F            LDR              R0, =GPIO_PORTF_DEN_R
+   97 0000003C 7801            LDRB             R1, [R0]
+   98 0000003E F041 0110       ORR              R1, #0x10
+   99 00000042 7001            STRB             R1, [R0]
+  100 00000044         ;G. Activate pull-up register to make PF4 negative logic
+                        (PUR)
+  101 00000044 485D            LDR              R0, =GPIO_PORTF_PUR_R
+  102 00000046 7801            LDRB             R1, [R0]
+  103 00000048 F04F 0110       MOV              R1, #0x10
+  104 0000004C 7001            STRB             R1, [R0]
+  105 0000004E         ; voltmeter, scope on PD3
+  106 0000004E         ; Initialization goes here
+  107 0000004E B662            CPSIE            I           ; TExaS voltmeter, 
+                                                            scope runs on inter
+                                                            rupts
+  108 00000050 485B            LDR              R0, =3000000
+  109 00000052 495C            LDR              R1, =ONDuty ;ON Duty cycle init
+                                                            . 30%
+  110 00000054 6008            STR              R0, [R1]
+  111 00000056 485C            LDR              R0, =7000000
+  112 00000058 495C            LDR              R1, =OFFDuty ;OFF Duty cycle in
+                                                            it. 70%
+  113 0000005A 6008            STR              R0, [R1]
+  114 0000005C F644 6020       LDR              R0, =20000
+  115 00000060 495B            LDR              R1, =BDutyON ;Breathing ON Duty
+                                                             cycle init. 10%
+  116 00000062 6008            STR              R0, [R1]
+  117 00000064 485B            LDR              R0, =180000
+  118 00000066 495C            LDR              R1, =BDutyOFF ;Breathing OFF Du
+
+
+
+ARM Macro Assembler    Page 4 
+
+
+                                                            ty cycle init. 90%
+  119 00000068 6008            STR              R0, [R1]
+  120 0000006A F04F 0200       LDR              R2, =0      ;Previous state ini
+                                                            t not pressed
+  121 0000006E F04F 0008       MOV              R0, #8
+  122 00000072 495A            LDR              R1, =SlopeCt
+  123 00000074 7008            STRB             R0, [R1]    ;slope count starts
+                                                             at 8
+  124 00000076 F04F 0001       MOV              R0, #1
+  125 0000007A 4959            LDR              R1, =RampFlag ;if RampFlag = 1,
+                                                             bfunc ramping, oth
+                                                            erwise ramp down
+  126 0000007C 7008            STRB             R0, [R1]
+  127 0000007E         loop
+  128 0000007E F04F 0A00       MOV              R10, #0     ;number of cycles s
+                                                            o far
+  129 00000082 4858            LDR              R0, =GPIO_PORTF_DATA_R
+  130 00000084 7801            LDRB             R1, [R0]
+  131 00000086 F001 0110       AND              R1, #0x10   ;isolating PF4 bit
+  132 0000008A 2910            CMP              R1, #0x10   ;checking if PF4 is
+                                                             0 or 1
+  133 0000008C D059            BEQ              Normal      ;equal, so PF4 is 1
+                                                             (negative logic), 
+                                                            go to Normal
+  134 0000008E         BsetPE2
+  135 0000008E 4856            LDR              R0, =GPIO_PORTE_DATA_R
+  136 00000090 F04F 0104       MOV              R1, #0x04
+  137 00000094 7001            STRB             R1, [R0]
+  138 00000096 4D4E            LDR              R5, =BDutyON
+  139 00000098 682A            LDR              R2, [R5]
+  140 0000009A F7FF FFB1       BL               Delay
+  141 0000009E F021 0104       BIC              R1, R1, #0x04
+  142 000000A2 7001            STRB             R1, [R0]
+  143 000000A4 4D4C            LDR              R5, =BDutyOFF
+  144 000000A6 682A            LDR              R2, [R5]
+  145 000000A8 F7FF FFAA       BL               Delay
+  146 000000AC F10A 0A01       ADD              R10, R10, #1
+  147 000000B0 F04F 0B0C       LDR              R11, =12    ;total number of cy
+                                                            cles
+  148 000000B4 45DA            CMP              R10, R11
+  149 000000B6 D1EA            BNE              BsetPE2
+  150 000000B8 4D48            LDR              R5, =SlopeCt
+  151 000000BA F895 8000       LDRB             R8, [R5]
+  152 000000BE F04F 0508       MOV              R5, #8
+  153 000000C2 45A8            CMP              R8, R5
+  154 000000C4 D00B            BEQ              SetRampUp
+  155 000000C6 F04F 0500       MOV              R5, #0
+  156 000000CA 45A8            CMP              R8, R5
+  157 000000CC D00D            BEQ              SetRampDown
+  158 000000CE         ChooseRamp
+  159 000000CE 4D44            LDR              R5, =RampFlag
+  160 000000D0 F895 9000       LDRB             R9, [R5]
+  161 000000D4 F04F 0500       MOV              R5, #0
+  162 000000D8 45A9            CMP              R9, R5
+  163 000000DA D11F            BNE              RampUp
+  164 000000DC E00B            B                RampDown
+  165 000000DE         SetRampUp
+  166 000000DE 4D40            LDR              R5, =RampFlag
+  167 000000E0 F04F 0901       MOV              R9, #1
+
+
+
+ARM Macro Assembler    Page 5 
+
+
+  168 000000E4 F885 9000       STRB             R9, [R5]
+  169 000000E8 E7F1            B                ChooseRamp
+  170 000000EA         SetRampDown
+  171 000000EA 4D3D            LDR              R5, =RampFlag
+  172 000000EC F04F 0900       MOV              R9, #0
+  173 000000F0 F885 9000       STRB             R9, [R5]
+  174 000000F4 E7EB            B                ChooseRamp
+  175 000000F6         RampDown
+  176 000000F6 F108 0801       ADD              R8, R8, #1
+  177 000000FA 4D38            LDR              R5, =SlopeCt
+  178 000000FC F885 8000       STRB             R8, [R5]
+  179 00000100 4D33            LDR              R5, =BDutyON
+  180 00000102 682E            LDR              R6, [R5]
+  181 00000104 4D34            LDR              R5, =BDutyOFF
+  182 00000106 682F            LDR              R7, [R5]
+  183 00000108 F644 6520       LDR              R5, =20000  ;change
+  184 0000010C EBA6 0605       SUB              R6, R6, R5
+  185 00000110 442F            ADD              R7, R7, R5
+  186 00000112 4D2F            LDR              R5, =BDutyON
+  187 00000114 602E            STR              R6, [R5]    ;Breathing ON Duty 
+                                                            -=10
+  188 00000116 4D30            LDR              R5, =BDutyOFF
+  189 00000118 602F            STR              R7, [R5]    ;Breathing OFF Duty
+                                                             +=10
+  190 0000011A E7B0            B                loop
+  191 0000011C         RampUp
+  192 0000011C F1A8 0801       SUB              R8, R8, #1
+  193 00000120 4D2E            LDR              R5, =SlopeCt
+  194 00000122 F885 8000       STRB             R8, [R5]
+  195 00000126 4D2A            LDR              R5, =BDutyON
+  196 00000128 682E            LDR              R6, [R5]
+  197 0000012A 4D2B            LDR              R5, =BDutyOFF
+  198 0000012C 682F            LDR              R7, [R5]
+  199 0000012E F644 6520       LDR              R5, =20000  ;change
+  200 00000132 442E            ADD              R6, R6, R5
+  201 00000134 EBA7 0705       SUB              R7, R7, R5
+  202 00000138 4D25            LDR              R5, =BDutyON
+  203 0000013A 602E            STR              R6, [R5]    ;Breathing ON Duty 
+                                                            +=10
+  204 0000013C 4D26            LDR              R5, =BDutyOFF
+  205 0000013E 602F            STR              R7, [R5]    ;Breathing OFF Duty
+                                                             -=10
+  206 00000140 E79D            B                loop
+  207 00000142         
+  208 00000142         ;Precondition: takes R1(current state) and R2(previous s
+                       tate)
+  209 00000142         ;Postcondition: Both not pressed, go to setPE2
+  210 00000142         ;    Previous (R2): Pressed, Current (R1): Pressed/Not -
+                       > Keep Polling
+  211 00000142         ;    Previous (R2): Not pressed, Current (R1): Pressed -
+                       > Change Duty Cycle
+  212 00000142         Normal
+  213 00000142 4829            LDR              R0, =GPIO_PORTE_DATA_R
+  214 00000144 7801            LDRB             R1, [R0]
+  215 00000146 F001 0102       AND              R1, #0x02   ;isolating PE1 bit
+  216 0000014A 2A02            CMP              R2, #2      ;checking if the pr
+                                                            evious state was pr
+                                                            essed
+  217 0000014C D101            BNE              CompSt      ;Previous not press
+
+
+
+ARM Macro Assembler    Page 6 
+
+
+                                                            ed, compare again
+  218 0000014E 460A            MOV              R2, R1      ;setting previous s
+                                                            tate
+  219 00000150 E795            B                loop
+  220 00000152         CompSt                               ;comparing the stat
+                                                            es
+  221 00000152 428A            CMP              R2, R1
+  222 00000154 D101            BNE              Change      ;Previous (R2): Not
+                                                             pressed, Current (
+                                                            R1): Pressed 
+  223 00000156 460A            MOV              R2, R1
+  224 00000158 E017            B                setPE2      ;Both not pressed
+  225 0000015A         Change
+  226 0000015A 4D1A            LDR              R5, =ONDuty
+  227 0000015C 682B            LDR              R3, [R5]
+  228 0000015E 4D1B            LDR              R5, =OFFDuty
+  229 00000160 682C            LDR              R4, [R5]
+  230 00000162 460A            MOV              R2, R1
+  231 00000164 4D21            LDR              R5, =9000000 ;temp register
+  232 00000166 42AB            CMP              R3, R5
+  233 00000168 D008            BEQ              Recycle     ;if ONDuty = 90%, r
+                                                            ecycle duties
+  234 0000016A 4D21            LDR              R5, =2000000
+  235 0000016C 442B            ADD              R3, R3, R5
+  236 0000016E EBA4 0405       SUB              R4, R4, R5
+  237 00000172 4D14            LDR              R5, =ONDuty
+  238 00000174 602B            STR              R3, [R5]    ;ON Duty +=20%
+  239 00000176 4D15            LDR              R5, =OFFDuty
+  240 00000178 602C            STR              R4, [R5]    ;OFF Duty -=20%
+  241 0000017A E006            B                setPE2
+  242 0000017C         Recycle
+  243 0000017C 4B1D            LDR              R3, =1000000
+  244 0000017E 4D11            LDR              R5, =ONDuty
+  245 00000180 602B            STR              R3, [R5]    ;ON Duty = 10%
+  246 00000182 4C1A            LDR              R4, =9000000
+  247 00000184 4D11            LDR              R5, =OFFDuty
+  248 00000186 602C            STR              R4, [R5]    ;OFF Duty = 90%
+  249 00000188 E7FF            B                setPE2
+  250 0000018A         setPE2
+  251 0000018A F04F 0104       MOV              R1, #0x04
+  252 0000018E 7001            STRB             R1, [R0]
+  253 00000190 4D0C            LDR              R5, =ONDuty
+  254 00000192 682A            LDR              R2, [R5]
+  255 00000194 F7FF FF34       BL               Delay
+  256 00000198 F021 0104       BIC              R1, R1, #0x04
+  257 0000019C 7001            STRB             R1, [R0]
+  258 0000019E 4D0B            LDR              R5, =OFFDuty
+  259 000001A0 682A            LDR              R2, [R5]
+  260 000001A2 F7FF FF2D       BL               Delay
+  261 000001A6         ; main engine goes here
+  262 000001A6         
+  263 000001A6 E76A            B                loop
+  264 000001A8         
+  265 000001A8         
+  266 000001A8         
+  267 000001A8                 ALIGN                        ; make sure the end
+                                                             of this section is
+                                                             aligned
+  268 000001A8                 END                          ; end of file
+
+
+
+ARM Macro Assembler    Page 7 
+
+
+              400FE608 
+              40024400 
+              4002451C 
+              40025400 
+              4002551C 
+              40025510 
+              002DC6C0 
+              00000000 
+              006ACFC0 
+              00000000 
+              00000000 
+              0002BF20 
+              00000000 
+              00000000 
+              00000000 
+              400253FC 
+              400243FC 
+              00895440 
+              001E8480 
+              000F4240 
+Command Line: --debug --xref --diag_suppress=9931 --cpu=Cortex-M4 --apcs=interw
+ork --depend=.\main.d -o.\main.o -I.\RTE\_Lab3 -IC:\Users\adois\AppData\Local\A
+rm\Packs\ARM\CMSIS\5.7.0\CMSIS\Core\Include -IC:\Users\adois\AppData\Local\Arm\
+Packs\Keil\TM4C_DFP\1.1.0\Device\Include\TM4C123 --predefine="__EVAL SETA 1" --
+predefine="__UVISION_VERSION SETA 533" --predefine="_RTE_ SETA 1" --predefine="
+TM4C123GH6PM SETA 1" --predefine="_RTE_ SETA 1" --list=.\main.lst main.s
+
+
+
+ARM Macro Assembler    Page 1 Alphabetic symbol ordering
+Relocatable symbols
+
+BDutyOFF 0000000C
+
+Symbol: BDutyOFF
+   Definitions
+      At line 53 in file main.s
+   Uses
+      At line 118 in file main.s
+      At line 143 in file main.s
+      At line 181 in file main.s
+      At line 188 in file main.s
+      At line 197 in file main.s
+      At line 204 in file main.s
+
+BDutyON 00000008
+
+Symbol: BDutyON
+   Definitions
+      At line 52 in file main.s
+   Uses
+      At line 115 in file main.s
+      At line 138 in file main.s
+      At line 179 in file main.s
+      At line 186 in file main.s
+      At line 195 in file main.s
+      At line 202 in file main.s
+
+DATA 00000000
+
+Symbol: DATA
+   Definitions
+      At line 47 in file main.s
+   Uses
+      None
+Comment: DATA unused
+OFFDuty 00000004
+
+Symbol: OFFDuty
+   Definitions
+      At line 51 in file main.s
+   Uses
+      At line 112 in file main.s
+      At line 228 in file main.s
+      At line 239 in file main.s
+      At line 247 in file main.s
+      At line 258 in file main.s
+
+ONDuty 00000000
+
+Symbol: ONDuty
+   Definitions
+      At line 50 in file main.s
+   Uses
+      At line 109 in file main.s
+      At line 226 in file main.s
+      At line 237 in file main.s
+      At line 244 in file main.s
+      At line 253 in file main.s
+
+RampFlag 00000011
+
+
+
+ARM Macro Assembler    Page 2 Alphabetic symbol ordering
+Relocatable symbols
+
+
+Symbol: RampFlag
+   Definitions
+      At line 55 in file main.s
+   Uses
+      At line 125 in file main.s
+      At line 159 in file main.s
+      At line 166 in file main.s
+      At line 171 in file main.s
+
+SlopeCt 00000010
+
+Symbol: SlopeCt
+   Definitions
+      At line 54 in file main.s
+   Uses
+      At line 122 in file main.s
+      At line 150 in file main.s
+      At line 177 in file main.s
+      At line 193 in file main.s
+
+7 symbols
+
+
+
+ARM Macro Assembler    Page 1 Alphabetic symbol ordering
+Relocatable symbols
+
+.text 00000000
+
+Symbol: .text
+   Definitions
+      At line 56 in file main.s
+   Uses
+      None
+Comment: .text unused
+BsetPE2 0000008E
+
+Symbol: BsetPE2
+   Definitions
+      At line 134 in file main.s
+   Uses
+      At line 149 in file main.s
+Comment: BsetPE2 used once
+Change 0000015A
+
+Symbol: Change
+   Definitions
+      At line 225 in file main.s
+   Uses
+      At line 222 in file main.s
+Comment: Change used once
+ChooseRamp 000000CE
+
+Symbol: ChooseRamp
+   Definitions
+      At line 158 in file main.s
+   Uses
+      At line 169 in file main.s
+      At line 174 in file main.s
+
+CompSt 00000152
+
+Symbol: CompSt
+   Definitions
+      At line 220 in file main.s
+   Uses
+      At line 217 in file main.s
+Comment: CompSt used once
+Delay 00000000
+
+Symbol: Delay
+   Definitions
+      At line 62 in file main.s
+   Uses
+      At line 63 in file main.s
+      At line 140 in file main.s
+      At line 145 in file main.s
+      At line 255 in file main.s
+      At line 260 in file main.s
+
+Normal 00000142
+
+Symbol: Normal
+   Definitions
+      At line 212 in file main.s
+   Uses
+
+
+
+ARM Macro Assembler    Page 2 Alphabetic symbol ordering
+Relocatable symbols
+
+      At line 133 in file main.s
+Comment: Normal used once
+RampDown 000000F6
+
+Symbol: RampDown
+   Definitions
+      At line 175 in file main.s
+   Uses
+      At line 164 in file main.s
+Comment: RampDown used once
+RampUp 0000011C
+
+Symbol: RampUp
+   Definitions
+      At line 191 in file main.s
+   Uses
+      At line 163 in file main.s
+Comment: RampUp used once
+Recycle 0000017C
+
+Symbol: Recycle
+   Definitions
+      At line 242 in file main.s
+   Uses
+      At line 233 in file main.s
+Comment: Recycle used once
+SetRampDown 000000EA
+
+Symbol: SetRampDown
+   Definitions
+      At line 170 in file main.s
+   Uses
+      At line 157 in file main.s
+Comment: SetRampDown used once
+SetRampUp 000000DE
+
+Symbol: SetRampUp
+   Definitions
+      At line 165 in file main.s
+   Uses
+      At line 154 in file main.s
+Comment: SetRampUp used once
+Start 00000006
+
+Symbol: Start
+   Definitions
+      At line 68 in file main.s
+   Uses
+      At line 59 in file main.s
+Comment: Start used once
+loop 0000007E
+
+Symbol: loop
+   Definitions
+      At line 127 in file main.s
+   Uses
+      At line 190 in file main.s
+      At line 206 in file main.s
+      At line 219 in file main.s
+
+
+
+ARM Macro Assembler    Page 3 Alphabetic symbol ordering
+Relocatable symbols
+
+      At line 263 in file main.s
+
+setPE2 0000018A
+
+Symbol: setPE2
+   Definitions
+      At line 250 in file main.s
+   Uses
+      At line 224 in file main.s
+      At line 241 in file main.s
+      At line 249 in file main.s
+
+15 symbols
+
+
+
+ARM Macro Assembler    Page 1 Alphabetic symbol ordering
+Absolute symbols
+
+GPIO_LOCK_KEY 4C4F434B
+
+Symbol: GPIO_LOCK_KEY
+   Definitions
+      At line 42 in file main.s
+   Uses
+      None
+Comment: GPIO_LOCK_KEY unused
+GPIO_PORTE_AFSEL_R 40024420
+
+Symbol: GPIO_PORTE_AFSEL_R
+   Definitions
+      At line 32 in file main.s
+   Uses
+      None
+Comment: GPIO_PORTE_AFSEL_R unused
+GPIO_PORTE_DATA_R 400243FC
+
+Symbol: GPIO_PORTE_DATA_R
+   Definitions
+      At line 30 in file main.s
+   Uses
+      At line 135 in file main.s
+      At line 213 in file main.s
+
+GPIO_PORTE_DEN_R 4002451C
+
+Symbol: GPIO_PORTE_DEN_R
+   Definitions
+      At line 33 in file main.s
+   Uses
+      At line 86 in file main.s
+Comment: GPIO_PORTE_DEN_R used once
+GPIO_PORTE_DIR_R 40024400
+
+Symbol: GPIO_PORTE_DIR_R
+   Definitions
+      At line 31 in file main.s
+   Uses
+      At line 80 in file main.s
+Comment: GPIO_PORTE_DIR_R used once
+GPIO_PORTF_AFSEL_R 40025420
+
+Symbol: GPIO_PORTF_AFSEL_R
+   Definitions
+      At line 37 in file main.s
+   Uses
+      None
+Comment: GPIO_PORTF_AFSEL_R unused
+GPIO_PORTF_CR_R 40025524
+
+Symbol: GPIO_PORTF_CR_R
+   Definitions
+      At line 41 in file main.s
+   Uses
+      None
+Comment: GPIO_PORTF_CR_R unused
+GPIO_PORTF_DATA_R 400253FC
+
+
+
+
+ARM Macro Assembler    Page 2 Alphabetic symbol ordering
+Absolute symbols
+
+Symbol: GPIO_PORTF_DATA_R
+   Definitions
+      At line 35 in file main.s
+   Uses
+      At line 129 in file main.s
+Comment: GPIO_PORTF_DATA_R used once
+GPIO_PORTF_DEN_R 4002551C
+
+Symbol: GPIO_PORTF_DEN_R
+   Definitions
+      At line 39 in file main.s
+   Uses
+      At line 96 in file main.s
+Comment: GPIO_PORTF_DEN_R used once
+GPIO_PORTF_DIR_R 40025400
+
+Symbol: GPIO_PORTF_DIR_R
+   Definitions
+      At line 36 in file main.s
+   Uses
+      At line 91 in file main.s
+Comment: GPIO_PORTF_DIR_R used once
+GPIO_PORTF_LOCK_R 40025520
+
+Symbol: GPIO_PORTF_LOCK_R
+   Definitions
+      At line 40 in file main.s
+   Uses
+      None
+Comment: GPIO_PORTF_LOCK_R unused
+GPIO_PORTF_PUR_R 40025510
+
+Symbol: GPIO_PORTF_PUR_R
+   Definitions
+      At line 38 in file main.s
+   Uses
+      At line 101 in file main.s
+Comment: GPIO_PORTF_PUR_R used once
+SYSCTL_RCGCGPIO_R 400FE608
+
+Symbol: SYSCTL_RCGCGPIO_R
+   Definitions
+      At line 43 in file main.s
+   Uses
+      At line 72 in file main.s
+Comment: SYSCTL_RCGCGPIO_R used once
+13 symbols
+
+
+
+ARM Macro Assembler    Page 1 Alphabetic symbol ordering
+External symbols
+
+TExaS_Init 00000000
+
+Symbol: TExaS_Init
+   Definitions
+      At line 45 in file main.s
+   Uses
+      At line 70 in file main.s
+Comment: TExaS_Init used once
+1 symbol
+372 symbols in table
